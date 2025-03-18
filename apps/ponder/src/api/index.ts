@@ -6,7 +6,7 @@ import type { Address, Hex } from "viem";
 
 import { oracleAbi } from "../../abis/Oracle";
 
-import { seizableCollateral } from "./helpers";
+import { accrueInterest, liquidationValues } from "./helpers";
 
 const app = new Hono();
 
@@ -58,8 +58,12 @@ async function getLiquidatablePositions(chainId: number, marketId: Hex) {
 
   if (!Object.keys(publicClients).includes(String(chainId))) return [];
 
-  const { totalBorrowAssets, totalBorrowShares, oracle, lltv, loanToken, collateralToken, irm } =
-    market[0];
+  const { oracle, lltv, loanToken, collateralToken, irm } = market[0];
+
+  const { totalBorrowAssets, totalBorrowShares } = accrueInterest(
+    market[0],
+    market[0].rateAtTarget,
+  );
 
   const collateralPrice = await publicClients[
     chainId as unknown as keyof typeof publicClients
@@ -71,6 +75,14 @@ async function getLiquidatablePositions(chainId: number, marketId: Hex) {
 
   return positions
     .map((position) => {
+      const { seizableCollateral, repayableAssets } = liquidationValues(
+        position.collateral,
+        position.borrowShares,
+        totalBorrowShares,
+        totalBorrowAssets,
+        lltv,
+        collateralPrice,
+      );
       return {
         ...position,
         loanToken,
@@ -78,17 +90,11 @@ async function getLiquidatablePositions(chainId: number, marketId: Hex) {
         irm,
         oracle,
         lltv,
-        seizableCollateral: seizableCollateral(
-          position.collateral,
-          position.borrowShares,
-          totalBorrowShares,
-          totalBorrowAssets,
-          lltv,
-          collateralPrice,
-        ),
+        seizableCollateral,
+        repayableAssets,
       };
     })
-    .filter((position) => position.seizableCollateral !== undefined);
+    .filter((position) => position.seizableCollateral !== 0n && position.repayableAssets !== 0n);
 }
 
 export default app;
